@@ -1,0 +1,7 @@
+build
+node_modules
+.secret
+package-lock.json
+note.txt
+migrations
+truffle-config.js
