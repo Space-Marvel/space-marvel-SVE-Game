@@ -7,7 +7,7 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 
-interface ISVECore {
+interface ISEVCore {
     function exists(uint256 _id) external view returns (bool);
 
     function ownerOf(uint256 tokenId) external view returns (address);
@@ -18,7 +18,7 @@ interface ISVECore {
         uint256 tokenId
     ) external;
 
-    function evolve(uint256[] memory _nftIds, uint256 _newGene) external;
+    function evolve(uint256[] memory _nftIds, uint256 _newGene) external  returns (uint256); 
 
     function breed(
         address _toAddress,
@@ -28,7 +28,7 @@ interface ISVECore {
     ) external returns (uint256);
 }
 
-contract SVEGame is Ownable, Pausable, ReentrancyGuard {
+contract SEVGame is Ownable, Pausable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     struct UserActive {
@@ -44,24 +44,35 @@ contract SVEGame is Ownable, Pausable, ReentrancyGuard {
         uint256[] nftIds;
     }
 
+    struct Fee {
+        IERC20 currency;
+        uint256 amount;
+        bool active;
+    }
+
+    /*
+        active hero: 0
+        active spaceship: 1
+        breed: 2
+        evolve: 3
+    */
+
+    mapping(uint8 => Fee) fees;
+
     mapping(uint256 => UserRequest) idToRequests;
     uint256 public currentRequestId;
 
-    ISVECore public nftHero;
-    ISVECore public nftSpaceShip;
+    ISEVCore public nftHero;
+    ISEVCore public nftSpaceShip;
 
     mapping(uint256 => UserActive) idToHeros;
     // mapping (address=>mapping (uint256=>UserActive)) idToNfts;
     mapping(uint256 => UserActive) idToSpaceShips;
-    uint256 public feeActiveHero;
-    uint256 public feeActiveSpaceShip;
-    // uint256 public feeBreed;
-    // uint256 public feeEvolve;
     uint256 public durationActiveHero;
     uint256 public durationActiveSpaceShip;
 
-    IERC20 public feeContractHero;
-    IERC20 public feeContractSpaceShip;
+    mapping(address => bool) whilelists;
+
     address public vault;
 
     event Active(
@@ -80,14 +91,8 @@ contract SVEGame is Ownable, Pausable, ReentrancyGuard {
     );
 
     constructor(
-        ISVECore _nftHero,
-        ISVECore _nftSpaceShip,
-        IERC20 _feeContractHero,
-        IERC20 _feeContractSpaceShip,
-        uint256 _feeActiveHero,
-        uint256 _feeActiveSpaceShip,
-        // uint256 _feeBreed,
-        // uint256 _feeEvolve,
+        ISEVCore _nftHero,
+        ISEVCore _nftSpaceShip,
         uint256 _durationActiveHero,
         uint256 _durationActiveSpaceShip,
         address _vault
@@ -102,23 +107,35 @@ contract SVEGame is Ownable, Pausable, ReentrancyGuard {
 
         nftHero = _nftHero;
         nftSpaceShip = _nftSpaceShip;
-        feeContractHero = _feeContractHero;
-        feeContractSpaceShip = _feeContractSpaceShip;
-        feeActiveHero = _feeActiveHero;
-        feeActiveSpaceShip = _feeActiveSpaceShip;
-        // feeBreed=_feeBreed;
-        // feeEvolve= _feeEvolve;
         durationActiveHero = _durationActiveHero;
         durationActiveSpaceShip = _durationActiveSpaceShip;
         vault = _vault;
     }
 
-    function setSVEHeroCore(ISVECore _nftHero) external onlyOwner {
+    modifier onlyWhilelist() {
+        require(whilelists[_msgSender()], "Error: only whilelist");
+        _;
+    }
+
+    function setWhilelists(
+        address[] memory _whilelists,
+        bool[] memory _isWhilelists
+    ) external onlyOwner {
+        require(
+            _whilelists.length == _isWhilelists.length,
+            "Error: invalid input"
+        );
+        for (uint8 i = 0; i < _whilelists.length; i++) {
+            whilelists[_whilelists[i]] = _isWhilelists[i];
+        }
+    }
+
+    function setSEVHeroCore(ISEVCore _nftHero) external onlyOwner {
         require(address(_nftHero) != address(0), "Error: NFT Hero address(0)");
         nftHero = _nftHero;
     }
 
-    function setSVESpaceShipCore(ISVECore _nftSpaceShip) external onlyOwner {
+    function setSEVSpaceShipCore(ISEVCore _nftSpaceShip) external onlyOwner {
         require(
             address(_nftSpaceShip) != address(0),
             "Error: NFT SpaceShip address(0)"
@@ -131,41 +148,14 @@ contract SVEGame is Ownable, Pausable, ReentrancyGuard {
         vault = _vault;
     }
 
-    function setFeeContractHero(IERC20 _feeContractHero) external onlyOwner {
-        feeContractHero = _feeContractHero;
+    function setFees(
+        uint8 _id,
+        IERC20 _currency,
+        uint256 _amount,
+        bool _active
+    ) external onlyOwner {
+        fees[_id] = Fee(_currency, _amount, _active);
     }
-
-    function setFeeContractSpaceShip(IERC20 _feeContractSpaceShip)
-        external
-        onlyOwner
-    {
-        feeContractSpaceShip = _feeContractSpaceShip;
-    }
-
-    function setFeeActiveHero(uint256 _feeActiveHero) external onlyOwner {
-        feeActiveHero = _feeActiveHero;
-    }
-
-    function setFeeActiveSpaceShip(uint256 _feeActiveSpaceShip)
-        external
-        onlyOwner
-    {
-        feeActiveSpaceShip = _feeActiveSpaceShip;
-    }
-
-    // function setFeeBreed(uint256 _feeBreed)
-    //     external
-    //     onlyOwner
-    // {
-    //     feeBreed = _feeBreed;
-    // }
-
-    // function setFeeEvolve(uint256 _feeEvolve)
-    //     external
-    //     onlyOwner
-    // {
-    //     feeEvolve = _feeEvolve;
-    // }
 
     function setDurationActiveHero(uint256 _durationActiveHero)
         external
@@ -215,29 +205,34 @@ contract SVEGame is Ownable, Pausable, ReentrancyGuard {
             idToHeros[_nftId].time = block.timestamp;
 
             //charge fee
-            if (address(feeContractHero) == address(0)) {
-                payable(vault).transfer(feeActiveHero);
-                //transfer BNB back to user if amount > fee
-                if (msg.value > feeActiveHero) {
-                    payable(_msgSender()).transfer(msg.value - feeActiveHero);
-                }
-            } else {
-                feeContractHero.safeTransferFrom(
-                    _msgSender(),
-                    vault,
-                    feeActiveHero
-                );
-                //transfer BNB back to user if currency is not address(0)
-                if (msg.value != 0) {
-                    payable(_msgSender()).transfer(msg.value);
+            if (fees[0].active) {
+                if (address(fees[0].currency) == address(0)) {
+                    payable(vault).transfer(fees[0].amount);
+                    //transfer BNB back to user if amount > fee
+                    if (msg.value > fees[0].amount) {
+                        payable(_msgSender()).transfer(
+                            msg.value - fees[0].amount
+                        );
+                    }
+                } else {
+                    fees[0].currency.safeTransferFrom(
+                        _msgSender(),
+                        vault,
+                        fees[0].amount
+                    );
+                    //transfer BNB back to user if currency is not address(0)
+                    if (msg.value != 0) {
+                        payable(_msgSender()).transfer(msg.value);
+                    }
                 }
             }
+
             emit Active(
                 _nftAddeess,
                 _nftId,
                 _msgSender(),
-                address(feeContractHero),
-                feeActiveHero,
+                address(fees[0].currency),
+                fees[0].amount,
                 block.timestamp
             );
         } else {
@@ -262,31 +257,34 @@ contract SVEGame is Ownable, Pausable, ReentrancyGuard {
             idToSpaceShips[_nftId].time = block.timestamp;
 
             //charge fee
-            if (address(feeContractSpaceShip) == address(0)) {
-                payable(vault).transfer(feeActiveSpaceShip);
-                //transfer BNB back to user if amount > fee
-                if (msg.value > feeActiveSpaceShip) {
-                    payable(_msgSender()).transfer(
-                        msg.value - feeActiveSpaceShip
+            if (fees[1].active) {
+                if (address(fees[1].currency) == address(0)) {
+                    payable(vault).transfer(fees[1].amount);
+                    //transfer BNB back to user if amount > fee
+                    if (msg.value > fees[1].amount) {
+                        payable(_msgSender()).transfer(
+                            msg.value - fees[1].amount
+                        );
+                    }
+                } else {
+                    fees[1].currency.safeTransferFrom(
+                        _msgSender(),
+                        vault,
+                        fees[1].amount
                     );
-                }
-            } else {
-                feeContractSpaceShip.safeTransferFrom(
-                    _msgSender(),
-                    vault,
-                    feeActiveHero
-                );
-                //transfer BNB back to user if currency is not address(0)
-                if (msg.value != 0) {
-                    payable(_msgSender()).transfer(msg.value);
+                    //transfer BNB back to user if currency is not address(0)
+                    if (msg.value != 0) {
+                        payable(_msgSender()).transfer(msg.value);
+                    }
                 }
             }
+
             emit Active(
                 _nftAddeess,
                 _nftId,
                 _msgSender(),
-                address(feeContractSpaceShip),
-                feeActiveSpaceShip,
+                address(fees[1].currency),
+                fees[1].amount,
                 block.timestamp
             );
         }
@@ -334,6 +332,7 @@ contract SVEGame is Ownable, Pausable, ReentrancyGuard {
 
     event EvolveRequest(
         address user,
+        uint256 requestId,
         address nft,
         uint256[] nftIds,
         uint256 time
@@ -341,6 +340,7 @@ contract SVEGame is Ownable, Pausable, ReentrancyGuard {
 
     function evolveRequest(address _nftAddeess, uint256[] memory _nftIds)
         external
+        nonReentrant
     {
         require(_nftAddeess == address(nftHero), "Error: NFT contract invalid");
 
@@ -365,9 +365,16 @@ contract SVEGame is Ownable, Pausable, ReentrancyGuard {
             _nftAddeess,
             _nftIds
         );
-        currentRequestId += 1;
 
-        emit EvolveRequest(_msgSender(), _nftAddeess, _nftIds, block.timestamp);
+        emit EvolveRequest(
+            _msgSender(),
+            currentRequestId,
+            _nftAddeess,
+            _nftIds,
+            block.timestamp
+        );
+
+        currentRequestId += 1;
     }
 
     event EvolveProcess(
@@ -375,10 +382,14 @@ contract SVEGame is Ownable, Pausable, ReentrancyGuard {
         address user,
         address nft,
         uint256[] nftIds,
+        uint256 newNftId,
         uint256 time
     );
 
-    function evolve(uint256 _requestId, uint256 _newGene) external onlyOwner {
+    function evolve(uint256 _requestId, uint256 _newGene)
+        external
+        onlyWhilelist
+    {
         require(
             idToRequests[_requestId].user != address(0),
             "Error: request invalid"
@@ -386,16 +397,17 @@ contract SVEGame is Ownable, Pausable, ReentrancyGuard {
 
         require(idToRequests[_requestId].isEvolve, "Error: request invalid");
 
-        ISVECore(idToRequests[_requestId].nft).evolve(
+        uint256 newId = ISEVCore(idToRequests[_requestId].nft).evolve(
             idToRequests[_requestId].nftIds,
             _newGene
         );
 
         emit EvolveProcess(
             _requestId,
-            _msgSender(),
+            idToRequests[_requestId].user,
             idToRequests[_requestId].nft,
             idToRequests[_requestId].nftIds,
+            newId,
             block.timestamp
         );
 
@@ -404,6 +416,7 @@ contract SVEGame is Ownable, Pausable, ReentrancyGuard {
 
     event BreedRequest(
         address user,
+        uint256 id,
         address nft,
         uint256[] nftIds,
         uint256 time
@@ -413,7 +426,7 @@ contract SVEGame is Ownable, Pausable, ReentrancyGuard {
         address _nftAddeess,
         uint256 _nftId1,
         uint256 _nftId2
-    ) external {
+    ) external payable nonReentrant {
         require(
             _nftAddeess == address(nftHero) ||
                 _nftAddeess == address(nftSpaceShip),
@@ -421,21 +434,21 @@ contract SVEGame is Ownable, Pausable, ReentrancyGuard {
         );
 
         require(
-            ISVECore(_nftAddeess).ownerOf(_nftId1) == _msgSender(),
+            ISEVCore(_nftAddeess).ownerOf(_nftId1) == _msgSender(),
             "Error: you are not the owner"
         );
 
         require(
-            ISVECore(_nftAddeess).ownerOf(_nftId2) == _msgSender(),
+            ISEVCore(_nftAddeess).ownerOf(_nftId2) == _msgSender(),
             "Error: you are not the owner"
         );
 
-        ISVECore(_nftAddeess).transferFrom(
+        ISEVCore(_nftAddeess).transferFrom(
             _msgSender(),
             address(this),
             _nftId1
         );
-        ISVECore(_nftAddeess).transferFrom(
+        ISEVCore(_nftAddeess).transferFrom(
             _msgSender(),
             address(this),
             _nftId2
@@ -452,8 +465,35 @@ contract SVEGame is Ownable, Pausable, ReentrancyGuard {
             ids
         );
 
+        //charge fee
+        if (fees[3].active) {
+            if (address(fees[3].currency) == address(0)) {
+                payable(vault).transfer(fees[3].amount);
+                //transfer BNB back to user if amount > fee
+                if (msg.value > fees[3].amount) {
+                    payable(_msgSender()).transfer(msg.value - fees[3].amount);
+                }
+            } else {
+                fees[3].currency.safeTransferFrom(
+                    _msgSender(),
+                    vault,
+                    fees[3].amount
+                );
+                //transfer BNB back to user if currency is not address(0)
+                if (msg.value != 0) {
+                    payable(_msgSender()).transfer(msg.value);
+                }
+            }
+        }
+        emit BreedRequest(
+            _msgSender(),
+            currentRequestId,
+            _nftAddeess,
+            ids,
+            block.timestamp
+        );
+
         currentRequestId += 1;
-        emit BreedRequest(_msgSender(), _nftAddeess, ids, block.timestamp);
     }
 
     event BreedProcess(
@@ -461,12 +501,13 @@ contract SVEGame is Ownable, Pausable, ReentrancyGuard {
         address user,
         address nft,
         uint256[] nftIds,
+        uint256 newNftId,
         uint256 time
     );
 
     function breedProcess(uint256 _requestId, uint256 _newGene)
         external
-        onlyOwner
+        onlyWhilelist
     {
         require(
             idToRequests[_requestId].user != address(0),
@@ -475,19 +516,19 @@ contract SVEGame is Ownable, Pausable, ReentrancyGuard {
 
         require(!idToRequests[_requestId].isEvolve, "Error: request invalid");
 
-        ISVECore(idToRequests[_requestId].nft).breed(
+        uint256 newNftId = ISEVCore(idToRequests[_requestId].nft).breed(
             idToRequests[_requestId].user,
             idToRequests[_requestId].nftIds[0],
             idToRequests[_requestId].nftIds[1],
             _newGene
         );
 
-        ISVECore(idToRequests[_requestId].nft).transferFrom(
+        ISEVCore(idToRequests[_requestId].nft).transferFrom(
             address(this),
             idToRequests[_requestId].user,
             idToRequests[_requestId].nftIds[0]
         );
-        ISVECore(idToRequests[_requestId].nft).transferFrom(
+        ISEVCore(idToRequests[_requestId].nft).transferFrom(
             address(this),
             idToRequests[_requestId].user,
             idToRequests[_requestId].nftIds[1]
@@ -498,6 +539,7 @@ contract SVEGame is Ownable, Pausable, ReentrancyGuard {
             idToRequests[_requestId].user,
             idToRequests[_requestId].nft,
             idToRequests[_requestId].nftIds,
+            newNftId,
             block.timestamp
         );
 
